@@ -5,10 +5,12 @@ import os
 from fastapi import FastAPI
 import uvicorn
 
+from scripts.seed_casting_demo import seed_casting_demo
 from scripts.seed_demo import seed
 from src.config.settings import engine
 from src.middlewares.request import limit_body, request_headers
 from src.models.tables import schema
+from src.routes.casting import router as casting_router
 from src.routes.workflow import router
 
 
@@ -20,6 +22,10 @@ async def lifespan(app):
             seed()
         except Exception:
             logging.exception('Demo seeding failed')
+        try:
+            seed_casting_demo()
+        except Exception:
+            logging.exception('Casting demo seeding failed')
     yield
 
 
@@ -27,6 +33,7 @@ app = FastAPI(title='Database business workflow', lifespan=lifespan)
 app.middleware('http')(limit_body)
 app.middleware('http')(request_headers)
 app.include_router(router)
+app.include_router(casting_router)
 
 if __name__ == '__main__':
     uvicorn.run(app, host='0.0.0.0', port=8000)

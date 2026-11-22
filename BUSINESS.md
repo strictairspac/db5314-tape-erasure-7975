@@ -46,3 +46,22 @@
 ```sh
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=projects/gb-5314/backend python3 -m unittest discover -s test-artifacts/gb-5314/tests -v
 ```
+
+## 选角批次入档与目录擦除
+
+素材在各组选角记录里的编号互不统一，合同与引用可能先于素材到档。以下规则由 `backend/src/services/casting_archive.py` 落地，状态保存在 artifacts 卷的 SQLite（`casting-registry.db`），API 与 worker 共用同一文件库。
+
+1. **异名同物归并。** 素材到档时登记规范素材与各组的组内编号别名（`material_aliases`，组内唯一）；同一份素材在 A 组叫 `A-9`、在 B 组叫 `B-77` 都指向同一 `material_id`。
+2. **合同、引用可先到。** 素材未到档时，合同与引用进入 `pending_links` 挂起；素材到档或编号改正后自动对上。引用挂起行显式保存两端编号，两端都到齐才建立关系。
+3. **编号改正的粘性。** `correct_ref` 只重新分配仍挂起的条目；已经对上素材的合同与引用保持原素材不动，别名指向新素材。
+4. **缺素材挂起、其他批次照常入档。** 批次条目按 `(批次, 组内编号)` 登记，任一条目对不上素材则整批 `pending`，状态中列出缺失的 `组/编号`；条目齐全的批次在同一事务内独立入档为 `archived`。素材补齐后可重试，重试按 `batch_id` 幂等，不产生第二条入档记录。
+5. **并发与失败安全。** 每个写操作是 `BEGIN IMMEDIATE` 显式事务，文件库启用 WAL，锁冲突时有限重试；失败整体回滚，旧版目录保留。每次成功入档生成递增的 `catalog_versions` 与 `catalog_snapshot`。
+6. **擦除按提交时版本。** 排队时冻结当前目录版本与目标清单；执行在隔离内存 SQLite 副本中进行，主注册表与生产素材不受影响。受合同保护的素材及其引用依赖链（闭包）继续留存；待删目标之间按引用拓扑多轮排程、同轮按编号排序，`ON DELETE RESTRICT` 外键阻止乱序，任一校验失败整体回滚。任务执行幂等，重复执行返回同一报告。
+7. **档案页面可见性。** `GET /casting/overview` 返回目录版本、素材清单、每个批次的入档状态与缺失素材；前端「选角入档」页以徽标区分挂起/已入档，挂起批次直接展示缺哪项素材并提供重试按钮。
+
+测试（仅依赖标准库，无需数据库或服务）：
+
+```sh
+cd backend && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. python3 -m unittest discover -s tests -v
+```
+
